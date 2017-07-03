@@ -12,8 +12,8 @@ defmodule Fw do
     children = [
       worker(Task, [fn -> init_kernel_modules() end], restart: :transient, id: Nerves.Init.KernelModules),
       worker(Task, [fn -> init_network() end], restart: :transient, id: Nerves.Init.Network),
-      worker(Fw.Teclado, [{26,19,13,6},{5,11,9,10}]),
-      worker(Fw.Alarma, [22])
+      worker(Fw.Teclado, [{21,20,16,12},{25,24,23,18}]),
+      worker(Fw.Alarma, [19, 26])
     ]
 
     # See http://elixir-lang.org/docs/stable/elixir/Supervisor.html
