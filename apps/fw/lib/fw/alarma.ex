@@ -5,101 +5,94 @@ defmodule Fw.Alarma do
   ## API
   ####
 
-  def start_link(gpio_button_number, gpio_led) do
-    GenServer.start_link(__MODULE__, [gpio_button_number, gpio_led], name: __MODULE__)
+  def start_link(gpio_normal, gpio_alerta, gpio_intruso, gpio_sensor) do
+    GenServer.start_link(__MODULE__, [gpio_normal, gpio_alerta, gpio_intruso, gpio_sensor], name: __MODULE__)
   end
 
-  def iniciar_teclado() do
-    GenServer.call(__MODULE__, :iniciar_teclado)
+  def cambiar_estado(texto_acumulado) do
+    GenServer.call(__MODULE__, {:cambiar_estado, texto_acumulado})
   end
 
-  def hacer_disponible() do
-    GenServer.call(__MODULE__, :hacer_disponible)
+  def intruso?() do
+    GenServer.call(__MODULE__, :intruso?)
   end
 
   ## Implementación GenServer
   ####
 
-  def init([gpio_button_number, gpio_led]) do
-    {:ok, pid_in} = GPIO.start_link(gpio_button_number, :input)
-    {:ok, pid_led} = GPIO.start_link(gpio_led, :output)
-    spawn fn -> loop(gpio_button_number, pid_in) end
-    {:ok, %{estado: :disponible, pid_led: pid_led}}
+  def init([gpio_normal, gpio_alerta, gpio_intruso, gpio_sensor]) do
+    {:ok, pid_normal} = GPIO.start_link(gpio_normal, :output)
+    {:ok, pid_alerta} = GPIO.start_link(gpio_alerta, :output)
+    {:ok, pid_intruso} = GPIO.start_link(gpio_intruso, :output)
+    {:ok, pid_sensor} = GPIO.start_link(gpio_sensor, :input)
+    GPIO.write(pid_normal, 1)
+    {:ok, %{pid_normal: pid_normal, pid_alerta: pid_alerta, pid_intruso: pid_intruso, sensor: {pid_sensor, gpio_sensor}, password: "123456", estado: :normal}}
   end
 
-  def handle_call(:iniciar_teclado, _from, estado = %{estado: :disponible, pid_led: pid_led}) do
-    GPIO.write(pid_led, 1)
-    Ui.Endpoint.broadcast! "teclado:eventos", "ingreso_contraseña", %{texto: "Presionaste por primera vez"}
-    spawn fn -> esperar_teclado({:procesando, ""}, 0, pid_led) end
-    {:reply, :iniciando, estado |> Map.put(:estado, :procesando)}
+  def handle_call({:cambiar_estado, texto_acumulado}, _from, estado = %{estado: :normal, password: password, pid_normal: pid_normal, pid_alerta: pid_alerta, sensor: {pid_sensor, gpio_sensor}}) when texto_acumulado == password do
+    spawn fn -> esperar_sensor(pid_normal, {pid_sensor, gpio_sensor}, pid_alerta) end
+    {:reply, :esperando, estado |> Map.put(:estado, :esperando)}
   end
 
-  def handle_call(:iniciar_teclado, _from, estado = %{estado: :procesando}) do
-    {:reply, :procesando, estado}
+  def handle_call({:cambiar_estado, texto_acumulado}, _from, estado = %{estado: :normal, password: password}) when texto_acumulado != password do
+    {:reply, :normal, estado}
   end
 
-  def handle_call(:hacer_disponible, _from, estado = %{estado: :procesando}) do
-    Ui.Endpoint.broadcast! "teclado:eventos", "ingreso_contraseña", %{texto: "Nuevamente disponible"}
-    {:reply, :procesando, estado |> Map.put(:estado, :disponible)}
+  def handle_call({:cambiar_estado, texto_acumulado}, _from, estado = %{estado: :esperando, password: password, pid_normal: pid_normal, pid_alerta: pid_alerta}) when texto_acumulado == password do
+    GPIO.write(pid_alerta, 0)
+    GPIO.write(pid_normal, 1)
+    {:reply, :esperando, estado |> Map.put(:estado, :normal)}
   end
 
-  ## Implementación Loop
-  ####
-
-  def loop(gpio_button_number, pid_in) do
-    GPIO.set_int(pid_in, :both)
-    do_loop(gpio_button_number, pid_in)
+  def handle_call({:cambiar_estado, texto_acumulado}, _from, estado = %{estado: :esperando, password: password}) when texto_acumulado != password do
+    {:reply, :esperando, estado}
   end
 
-  def do_loop(gpio_button_number, pid_in) do
+  def handle_call({:cambiar_estado, texto_acumulado}, _from, estado = %{estado: :intruso, password: password, pid_normal: pid_normal, pid_intruso: pid_intruso}) when texto_acumulado == password do
+    GPIO.write(pid_intruso, 0)
+    GPIO.write(pid_normal, 1)
+    {:reply, :esperando, estado |> Map.put(:estado, :normal)}
+  end
+
+  def handle_call({:cambiar_estado, texto_acumulado}, _from, estado = %{estado: :intruso, password: password}) when texto_acumulado != password do
+    {:reply, :intruso, estado}
+  end
+
+  def handle_call(:intruso?, _from, estado = %{estado: :esperando, pid_alerta: pid_alerta, pid_intruso: pid_intruso}) do
+    GPIO.write(pid_alerta, 0)
+    GPIO.write(pid_intruso, 1)
+    {:reply, :normal, estado |> Map.put(:estado, :intruso)}
+  end
+
+  def handle_call(:intruso?, _from, estado = %{estado: :normal}) do
+    {:reply, :normal, estado}
+  end
+
+  defp esperar_sensor(pid_normal, {pid_sensor, gpio_sensor}, pid_alerta) do
+    spawn fn -> tintinear_pid_normal(pid_normal, 0) end
+    :timer.sleep(10000)
+    Ui.Endpoint.broadcast! "teclado:eventos", "ingreso_contraseña", %{texto: "Tiempo 20 seg"}
+    GPIO.set_int(pid_sensor, :both)
     receive do
-      {:gpio_interrupt, ^gpio_button_number, :falling} ->
-        iniciar_teclado()
+      {:gpio_interrupt, ^gpio_sensor, :rising} ->  ## Detecto movimiento
+        Ui.Endpoint.broadcast! "teclado:eventos", "ingreso_contraseña", %{texto: "Rising"}
+        GPIO.write(pid_alerta, 1)
+        Ui.Endpoint.broadcast! "teclado:eventos", "ingreso_contraseña", %{texto: "Esperando tiempo"}
+        :timer.sleep(25000)
+        intruso?()
     end
-    do_loop(gpio_button_number, pid_in)
+    GPIO.set_int(pid_sensor, :none)
   end
 
-  def esperar_teclado({:procesando, _texto_acumulado}, tiempo_acumulado, pid_led) when tiempo_acumulado>=20000 do  ## Se paso el limite del tiempo
-    :timer.sleep(100)
-    Ui.Endpoint.broadcast! "teclado:eventos", "ingreso_contraseña", %{texto: "Apagando Led"}
-    GPIO.write(pid_led, 0)
-    Fw.Teclado.terminar()
-    hacer_disponible()
+  defp tintinear_pid_normal(pid_normal, 10000) do
+    GPIO.write(pid_normal, 0)
   end
 
-  def esperar_teclado({:procesando, texto_acumulado}, tiempo_acumulado, pid_led) when tiempo_acumulado<20000 do  ##2 minutos de tolerancia 120000
-    :timer.sleep(100)
-    Ui.Endpoint.broadcast! "teclado:eventos", "ingreso_contraseña", %{texto: "#{tiempo_acumulado+100}"}
-    respuesta = Fw.Teclado.cambiar_estado()
-      |> procesar_respuesta(texto_acumulado)
-    Ui.Endpoint.broadcast! "teclado:eventos", "ingreso_contraseña", %{texto: "Respuesta Recibida"}
-    esperar_teclado(respuesta, tiempo_acumulado+100, pid_led)
-  end
-
-  def esperar_teclado({:terminado, texto_acumulado}, _tiempo_acumulado, pid_led) do  ## Se obtuvieron los 6 digitos
-    :timer.sleep(100)
-    Ui.Endpoint.broadcast! "teclado:eventos", "ingreso_contraseña", %{texto: texto_acumulado}
-    GPIO.write(pid_led, 0)
-    hacer_disponible()
-  end
-
-  def procesar_respuesta({:procesando, nil}, texto_acumulado) do
-    Ui.Endpoint.broadcast! "teclado:eventos", "ingreso_contraseña", %{texto: "Texto acumulado: #{texto_acumulado}"}
-    {:procesando, texto_acumulado}
-  end
-
-  def procesar_respuesta({:procesando, letra}, texto_acumulado) do
-    Ui.Endpoint.broadcast! "teclado:eventos", "ingreso_contraseña", %{texto: "Texto acumulado: #{texto_acumulado}"}
-    {:procesando, texto_acumulado<>letra}
-  end
-
-  def procesar_respuesta({:terminado, letra}, texto_acumulado) do
-    Ui.Endpoint.broadcast! "teclado:eventos", "ingreso_contraseña", %{texto: "Texto acumulado: #{texto_acumulado}"}
-    {:terminado, texto_acumulado<>letra}
-  end
-
-  def procesar_respuesta(:ningun_caso, texto_acumulado) do
-    Ui.Endpoint.broadcast! "teclado:eventos", "ingreso_contraseña", %{texto: "Ningun caso: #{texto_acumulado}"}
-    {:terminado, texto_acumulado}
+  defp tintinear_pid_normal(pid_normal, acc) when acc<10000 do
+    GPIO.write(pid_normal, 0)
+    :timer.sleep(500)
+    GPIO.write(pid_normal, 1)
+    :timer.sleep(500)
+    tintinear_pid_normal(pid_normal, acc+1000)
   end
 end

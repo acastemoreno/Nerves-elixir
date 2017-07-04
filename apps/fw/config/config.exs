@@ -17,6 +17,8 @@ use Mix.Config
 # of this file so it overrides the configuration defined above.
 # Uncomment to use target specific configurations
 
+#url: [host: "192.168.0.4", port: 80],
+
 # import_config "#{Mix.Project.config[:target]}.exs"
 config :logger, level: :debug
 
@@ -25,7 +27,7 @@ config :nerves_interim_wifi,
 
 config :ui, Ui.Endpoint,
   http: [port: 80],
-  url: [host: "192.168.0.4", port: 80],
+  url: [host: "192.168.0.7", port: 80],
   secret_key_base: "WiCLsSiI5RcVdtO7zKkzwMtVIjqkIgiOoP3vkiqLFq3VGVtmlz23OPGl28syn6BQ",
   root: Path.dirname(__DIR__),
   server: true,

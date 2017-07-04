@@ -1,6 +1,7 @@
 defmodule Fw do
   use Application
   require Logger
+  @interface :wlan0
   @kernel_modules Mix.Project.config[:kernel_modules] || []
 
   # See http://elixir-lang.org/docs/stable/elixir/Application.html
@@ -12,8 +13,9 @@ defmodule Fw do
     children = [
       worker(Task, [fn -> init_kernel_modules() end], restart: :transient, id: Nerves.Init.KernelModules),
       worker(Task, [fn -> init_network() end], restart: :transient, id: Nerves.Init.Network),
-      worker(Fw.Teclado, [{21,20,16,12},{25,24,23,18}]),
-      worker(Fw.Alarma, [19, 26])
+      worker(Fw.Teclado, [{21,20,16,12},{25,24,23,18},13]),
+      worker(Fw.TecladoManager, [19, 26]),
+      worker(Fw.Alarma, [6, 5, 11, 15])
     ]
 
     # See http://elixir-lang.org/docs/stable/elixir/Supervisor.html
@@ -26,9 +28,9 @@ defmodule Fw do
   end
 
   def init_network() do
-    #opts = Application.get_env(:hello_nerves, @interface)
-    #Nerves.InterimWiFi.setup("wlan0", opts)
-    Nerves.Networking.setup :eth0, [mode: "dhcp"]
+    opts = Application.get_env(:fw, @interface)
+    Nerves.InterimWiFi.setup("wlan0", opts)
+    #Nerves.Networking.setup :eth0, [mode: "dhcp"]
   end
 
 end
